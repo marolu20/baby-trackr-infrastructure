@@ -1,0 +1,103 @@
+services:
+
+  # Main application database
+  trackr-db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${DB_MAIN_NAME}
+      POSTGRES_USER: ${DB_MAIN_USERNAME}
+      POSTGRES_PASSWORD: ${DB_MAIN_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - trackr_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Analytics database
+  analytics-db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${DB_ANALYTICS_NAME}
+      POSTGRES_USER: ${DB_ANALYTICS_USERNAME}
+      POSTGRES_PASSWORD: ${DB_ANALYTICS_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - analytics_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Kafka broker (KRaft mode)
+  kafka:
+    image: apache/kafka:3.9.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports:
+      - "9094:9094"
+
+  # Main Spring Boot service
+  baby-trackr-service:
+    build:
+      context: ../baby-trackr-service
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: ${MAIN_DB_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_MAIN_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_MAIN_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      trackr-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+  # Analytics Spring Boot service
+  baby-trackr-analytics:
+    build:
+      context: ../babytrackr-analytics-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: ${ANALYTICS_DB_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_ANALYTICS_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_ANALYTICS_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      analytics-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+  # React frontend
+  baby-trackr-ui:
+    build:
+      context: ../baby-trackr-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - baby-trackr-service
+
+volumes:
+  trackr_data:
+  analytics_data:
